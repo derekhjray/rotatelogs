@@ -5,6 +5,7 @@
 package rotatelogs
 
 import (
+	"compress/gzip"
 	"fmt"
 	"io"
 	"os"
@@ -14,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lestrrat-go/file-rotatelogs/internal/fileutil"
+	"github.com/derekhjray/rotatelogs/internal/fileutil"
 	strftime "github.com/lestrrat-go/strftime"
 	"github.com/pkg/errors"
 )
@@ -44,6 +45,7 @@ func New(p string, options ...Option) (*RotateLogs, error) {
 	var maxAge time.Duration
 	var handler Handler
 	var forceNewFile bool
+	var compressed bool
 
 	for _, o := range options {
 		switch o.Name() {
@@ -72,6 +74,8 @@ func New(p string, options ...Option) (*RotateLogs, error) {
 			handler = o.Value().(Handler)
 		case optkeyForceNewFile:
 			forceNewFile = true
+		case optkeyCompress:
+			compressed = true
 		}
 	}
 
@@ -95,6 +99,7 @@ func New(p string, options ...Option) (*RotateLogs, error) {
 		rotationSize:  rotationSize,
 		rotationCount: rotationCount,
 		forceNewFile:  forceNewFile,
+		compressed:    compressed,
 	}, nil
 }
 
@@ -159,10 +164,11 @@ func (rl *RotateLogs) getWriterNolock(bailOnRotateFail, useGenerationalNames boo
 			} else {
 				name = fmt.Sprintf("%s.%d", filename, generation)
 			}
-			if _, err := os.Stat(name); err != nil {
-				filename = name
-
-				break
+			if _, err = os.Stat(name); err != nil {
+				if _, err = os.Stat(name + ".gz"); err != nil {
+					filename = name
+					break
+				}
 			}
 			generation++
 		}
@@ -173,7 +179,7 @@ func (rl *RotateLogs) getWriterNolock(bailOnRotateFail, useGenerationalNames boo
 		return nil, errors.Wrapf(err, `failed to create a new file %v`, filename)
 	}
 
-	if err := rl.rotateNolock(filename); err != nil {
+	if err = rl.rotateNolock(filename); err != nil {
 		err = errors.Wrap(err, "failed to rotate")
 		if bailOnRotateFail {
 			// Failure to rotate is a problem, but it's really not a great
@@ -198,6 +204,32 @@ func (rl *RotateLogs) getWriterNolock(bailOnRotateFail, useGenerationalNames boo
 	rl.curFn = filename
 	rl.generation = generation
 
+	if rl.compressed {
+		if previousFn != "" {
+			rl.compress(previousFn)
+			previousFn = previousFn + ".gz"
+		} else {
+			if matches, err := filepath.Glob(rl.globPattern); err == nil && len(matches) > 0 {
+				for _, path := range matches {
+					if path == filename || strings.HasSuffix(path, ".gz") || strings.HasSuffix(path, "_lock") || strings.HasSuffix(path, "_symlink") {
+						continue
+					}
+
+					fl, err := os.Lstat(path)
+					if err != nil {
+						continue
+					}
+
+					if fl.Mode()&os.ModeSymlink == os.ModeSymlink {
+						continue
+					}
+
+					rl.compress(path)
+				}
+			}
+		}
+	}
+
 	if h := rl.eventHandler; h != nil {
 		go h.Handle(&FileRotatedEvent{
 			prev:    previousFn,
@@ -206,6 +238,30 @@ func (rl *RotateLogs) getWriterNolock(bailOnRotateFail, useGenerationalNames boo
 	}
 
 	return fh, nil
+}
+
+func (rl *RotateLogs) compress(filename string) {
+	in, err := os.Open(filename)
+	if err != nil {
+		return
+	}
+	defer in.Close()
+
+	gzfile := filename + ".gz"
+	out, err := os.Create(gzfile)
+	if err != nil {
+		return
+	}
+	defer out.Close()
+
+	gw, err := gzip.NewWriterLevel(out, gzip.BestCompression)
+	if err != nil {
+		return
+	}
+	defer gw.Close()
+
+	io.Copy(gw, in)
+	os.Remove(filename)
 }
 
 // CurrentFileName returns the current file name that
