@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -205,7 +206,7 @@ func (rl *RotateLogs) getWriterNolock(bailOnRotateFail, useGenerationalNames boo
 	rl.generation = generation
 
 	if rl.compressed {
-		if previousFn != "" {
+		if previousFn != "" && previousFn != filename {
 			rl.compress(previousFn)
 			previousFn = previousFn + ".gz"
 		} else {
@@ -373,7 +374,7 @@ func (rl *RotateLogs) rotateNolock(filename string) error {
 	cutoff := rl.clock.Now().Add(-1 * rl.maxAge)
 
 	// the linter tells me to pre allocate this...
-	toUnlink := make([]string, 0, len(matches))
+	toUnlink := make([]*logfile, 0, len(matches))
 	for _, path := range matches {
 		// Ignore lock files
 		if strings.HasSuffix(path, "_lock") || strings.HasSuffix(path, "_symlink") {
@@ -397,7 +398,7 @@ func (rl *RotateLogs) rotateNolock(filename string) error {
 		if rl.rotationCount > 0 && fl.Mode()&os.ModeSymlink == os.ModeSymlink {
 			continue
 		}
-		toUnlink = append(toUnlink, path)
+		toUnlink = append(toUnlink, &logfile{name: path, timestamp: fi.ModTime().UnixNano()})
 	}
 
 	if rl.rotationCount > 0 {
@@ -406,7 +407,8 @@ func (rl *RotateLogs) rotateNolock(filename string) error {
 			return nil
 		}
 
-		toUnlink = toUnlink[:len(toUnlink)-int(rl.rotationCount)]
+		sort.Sort(byTimestamp(toUnlink))
+		toUnlink = toUnlink[:len(toUnlink)-int(rl.rotationCount)-1]
 	}
 
 	if len(toUnlink) <= 0 {
@@ -416,8 +418,12 @@ func (rl *RotateLogs) rotateNolock(filename string) error {
 	guard.Enable()
 	go func() {
 		// unlink files on a separate goroutine
-		for _, path := range toUnlink {
-			os.Remove(path)
+		for _, file := range toUnlink {
+			if file.name == rl.curFn {
+				continue
+			}
+
+			os.Remove(file.name)
 		}
 	}()
 
@@ -439,4 +445,23 @@ func (rl *RotateLogs) Close() error {
 	rl.outFh = nil
 
 	return nil
+}
+
+type logfile struct {
+	name      string
+	timestamp int64
+}
+
+type byTimestamp []*logfile
+
+func (bts byTimestamp) Len() int {
+	return len(bts)
+}
+
+func (bts byTimestamp) Less(i, j int) bool {
+	return bts[i].timestamp < bts[j].timestamp
+}
+
+func (bts byTimestamp) Swap(i, j int) {
+	bts[i], bts[j] = bts[j], bts[i]
 }
