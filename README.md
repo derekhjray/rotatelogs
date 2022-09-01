@@ -219,6 +219,30 @@ Enable compress old log files with gzip.
   )
 ```
 
+## WithFormatter
+
+Specify custom log formatter for rotatelogs hook, default `rotatelogs.NewTextFormatter(true)`
+
+```go
+  rotatelogs.NewHook(
+    "/var/log/myapp/log.%Y%m%d",
+    rotatelogs.WithFormatter(rotatelogs.NewTextFormatter(true)),
+  )
+```
+
+# Hook
+
+If you want to use rotatelogs package with logrus.Hook, rotatelogs provides a default implementation, which you can easily
+embed rotatelogs package in your code without third-party hook implementation. And you can specify a customized `logrus.Formatter`
+when you create hook.
+
+```go
+  rotatelogs.NewHook(
+    "/var/log/myapp/log.%Y%m%d",
+    rotatelogs.WithFormatter(rotatelogs.NewTextFormatter(true)),
+  )
+```
+
 # Rotating files forcefully
 
 If you want to rotate files forcefully before the actual rotation time has reached,

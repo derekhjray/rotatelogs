@@ -1,6 +1,7 @@
 package rotatelogs
 
 import (
+	log "github.com/sirupsen/logrus"
 	"time"
 
 	"github.com/derekhjray/rotatelogs/internal/option"
@@ -16,6 +17,7 @@ const (
 	optkeyRotationCount = "rotation-count"
 	optkeyForceNewFile  = "force-new-file"
 	optkeyCompress      = "compress"
+	optkeyFormatter     = "formatter"
 )
 
 // WithClock creates a new Option that sets a clock
@@ -92,4 +94,9 @@ func ForceNewFile() Option {
 // Compress enable gzip compress for old log files
 func Compress() Option {
 	return option.New(optkeyCompress, true)
+}
+
+// WithFormatter specify logrus formatter for rotatelogs hook
+func WithFormatter(formatter log.Formatter) Option {
+	return option.New(optkeyFormatter, formatter)
 }
